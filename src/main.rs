@@ -1,11 +1,14 @@
 use std::{f32::consts::PI, num::NonZeroU8};
 
+mod camera_controller;
+mod mipmap_generator;
+
 use bevy::{
     core_pipeline::{bloom::BloomSettings, fxaa::Fxaa},
     prelude::*,
 };
-use bevy_basic_camera::{CameraController, CameraControllerPlugin};
-use bevy_mod_mipmap_generator::{generate_mipmaps, MipmapGeneratorPlugin, MipmapGeneratorSettings};
+use camera_controller::{CameraController, CameraControllerPlugin};
+use mipmap_generator::{generate_mipmaps, MipmapGeneratorPlugin, MipmapGeneratorSettings};
 
 pub fn main() {
     let mut app = App::new();
