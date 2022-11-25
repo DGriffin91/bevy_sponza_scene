@@ -1,4 +1,4 @@
-// From https://github.com/DGriffin91/bevy_basic_camera
+// Copied from https://github.com/DGriffin91/bevy_basic_camera
 
 use bevy::{
     input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel},

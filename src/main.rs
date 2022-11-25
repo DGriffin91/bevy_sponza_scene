@@ -10,7 +10,21 @@ use bevy::{
 use camera_controller::{CameraController, CameraControllerPlugin};
 use mipmap_generator::{generate_mipmaps, MipmapGeneratorPlugin, MipmapGeneratorSettings};
 
+use crate::convert::{change_gltf_to_use_ktx2, convert_images_to_ktx2};
+
+mod convert;
+
 pub fn main() {
+    let args = &mut std::env::args();
+    args.next();
+    if let Some(arg) = &args.next() {
+        if arg == "--convert" {
+            println!("This will take a few minutes");
+            convert_images_to_ktx2();
+            change_gltf_to_use_ktx2();
+        }
+    }
+
     let mut app = App::new();
 
     app.insert_resource(Msaa { samples: 1 })
@@ -32,6 +46,7 @@ pub fn main() {
             ..default()
         })
         .add_plugin(MipmapGeneratorPlugin)
+        // Mipmap generation be skipped if ktx2 is used
         .add_system(generate_mipmaps::<StandardMaterial>)
         .add_startup_system(setup)
         .add_system(proc_scene);
@@ -226,6 +241,7 @@ pub fn all_children<F: FnMut(Entity)>(
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn proc_scene(
     mut commands: Commands,
     flip_normals_query: Query<Entity, With<PostProcScene>>,
