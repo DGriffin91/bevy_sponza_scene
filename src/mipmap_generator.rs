@@ -73,11 +73,17 @@ pub fn generate_mipmaps<M: Material + GetImages>(
             for image_h in material.get_images().into_iter().flatten() {
                 if let Some(image) = images.get_mut(image_h) {
                     if image.texture_descriptor.mip_level_count == 1 {
-                        match generate_mips_texture(image, &settings, &default_sampler) {
+                        match generate_mips_texture(image, &settings) {
                             Ok(_) => (),
                             Err(e) => warn!("{}", e),
                         }
                     }
+                    let mut descriptor = match image.sampler_descriptor.clone() {
+                        ImageSampler::Default => (*default_sampler).clone(),
+                        ImageSampler::Descriptor(descriptor) => descriptor,
+                    };
+                    descriptor.anisotropy_clamp = settings.anisotropic_filtering;
+                    image.sampler_descriptor = ImageSampler::Descriptor(descriptor);
                 }
             }
         }
@@ -87,7 +93,6 @@ pub fn generate_mipmaps<M: Material + GetImages>(
 pub fn generate_mips_texture(
     image: &mut Image,
     settings: &MipmapGeneratorSettings,
-    default_sampler: &DefaultSampler,
 ) -> anyhow::Result<()> {
     check_image_compatible(image)?;
     match try_into_dynamic(image.clone()) {
@@ -100,12 +105,6 @@ pub fn generate_mips_texture(
             );
             image.texture_descriptor.mip_level_count = mip_level_count;
             image.data = image_data;
-            let mut descriptor = match image.sampler_descriptor.clone() {
-                ImageSampler::Default => (*default_sampler).clone(),
-                ImageSampler::Descriptor(descriptor) => descriptor,
-            };
-            descriptor.anisotropy_clamp = settings.anisotropic_filtering;
-            image.sampler_descriptor = ImageSampler::Descriptor(descriptor);
             Ok(())
         }
         Err(e) => Err(e),
