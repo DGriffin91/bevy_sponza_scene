@@ -34,15 +34,13 @@ pub fn main() {
         .add_plugin(MipmapGeneratorPlugin)
         .add_system(generate_mipmaps::<StandardMaterial>)
         .add_startup_system(setup)
-        .add_system(remove_default_cameras)
-        .add_system(remove_default_light)
-        .add_system(flip_normals);
+        .add_system(proc_scene);
 
     app.run();
 }
 
 #[derive(Component)]
-pub struct FlipNormals;
+pub struct PostProcScene;
 
 #[derive(Component)]
 pub struct GrifLight;
@@ -56,7 +54,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             scene: asset_server.load("main_sponza/NewSponza_Main_glTF_002.gltf#Scene0"),
             ..default()
         })
-        .insert(FlipNormals);
+        .insert(PostProcScene);
 
     // curtains
     commands
@@ -64,7 +62,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             scene: asset_server.load("PKG_A_Curtains/NewSponza_Curtains_glTF.gltf#Scene0"),
             ..default()
         })
-        .insert(FlipNormals);
+        .insert(PostProcScene);
 
     // Sun
     const HALF_SIZE: f32 = 20.0;
@@ -205,71 +203,65 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 ..default()
             },
             BloomSettings {
-                threshold: 0.0,
+                threshold: 0.1,
                 knee: 0.1,
                 scale: 1.0,
                 intensity: 0.01,
             },
         ))
-        .insert(CameraController::default())
+        .insert(CameraController::default().print_controls())
         .insert(Fxaa::default());
 }
 
-// Sponza has a bunch of camera by default
-pub fn remove_default_cameras(
-    mut commands: Commands,
-    cameras: Query<Entity, (With<Camera>, Without<CameraController>)>,
+pub fn all_children<F: FnMut(Entity)>(
+    children: &Children,
+    children_query: &Query<&Children>,
+    closure: &mut F,
 ) {
-    for cam in &cameras {
-        commands.entity(cam).despawn();
+    for child in children {
+        if let Ok(children) = children_query.get(*child) {
+            all_children(children, children_query, closure);
+        }
+        closure(*child);
     }
 }
 
-// Sponza has a bunch of lights by default
-pub fn remove_default_light(
+pub fn proc_scene(
     mut commands: Commands,
-    cameras: Query<
+    flip_normals_query: Query<Entity, With<PostProcScene>>,
+    children_query: Query<&Children>,
+    has_std_mat: Query<&Handle<StandardMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    lights: Query<
         Entity,
         (
             Or<(With<PointLight>, With<DirectionalLight>, With<SpotLight>)>,
             Without<GrifLight>,
         ),
     >,
-) {
-    for cam in &cameras {
-        commands.entity(cam).despawn();
-    }
-}
-
-pub fn flip_normals_hierarchy(
-    children: &Children,
-    children_query: &Query<&Children>,
-    has_std_mat: &Query<&Handle<StandardMaterial>>,
-    materials: &mut Assets<StandardMaterial>,
-) {
-    for child in children {
-        if let Ok(mat_h) = has_std_mat.get(*child) {
-            if let Some(mat) = materials.get_mut(mat_h) {
-                mat.flip_normal_map_y = true;
-            }
-        }
-        if let Ok(children) = children_query.get(*child) {
-            flip_normals_hierarchy(children, children_query, has_std_mat, materials);
-        }
-    }
-}
-
-pub fn flip_normals(
-    mut commands: Commands,
-    flip_normals_query: Query<Entity, With<FlipNormals>>,
-    children_query: Query<&Children>,
-    has_std_mat: Query<&Handle<StandardMaterial>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    cameras: Query<Entity, With<Camera>>,
 ) {
     for entity in flip_normals_query.iter() {
         if let Ok(children) = children_query.get(entity) {
-            flip_normals_hierarchy(children, &children_query, &has_std_mat, &mut materials);
+            all_children(children, &children_query, &mut |entity| {
+                // Sponza needs flipped normals
+                if let Ok(mat_h) = has_std_mat.get(entity) {
+                    if let Some(mat) = materials.get_mut(mat_h) {
+                        mat.flip_normal_map_y = true;
+                    }
+                }
+
+                // Sponza has a bunch of lights by default
+                if lights.get(entity).is_ok() {
+                    commands.entity(entity).despawn();
+                }
+
+                // Sponza has a bunch of cameras by default
+                if cameras.get(entity).is_ok() {
+                    commands.entity(entity).despawn();
+                }
+            });
+            commands.entity(entity).remove::<PostProcScene>();
         }
-        commands.entity(entity).remove::<FlipNormals>();
     }
 }
