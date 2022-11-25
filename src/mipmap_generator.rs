@@ -89,9 +89,7 @@ pub fn generate_mips_texture(
     settings: &MipmapGeneratorSettings,
     default_sampler: &DefaultSampler,
 ) -> anyhow::Result<()> {
-    if let Err(e) = check_image_compatible(image) {
-        return Err(e);
-    }
+    check_image_compatible(image)?;
     match try_into_dynamic(image.clone()) {
         Ok(mut dyn_image) => {
             let (mip_level_count, image_data) = generate_mips(
@@ -143,10 +141,9 @@ pub fn generate_mips(
 }
 
 /// Extract a specific individual mip level as a new image.
+#[allow(dead_code)]
 pub fn extract_mip_level(image: &Image, mip_level: u32) -> anyhow::Result<Image> {
-    if let Err(e) = check_image_compatible(image) {
-        return Err(e);
-    }
+    check_image_compatible(image)?;
 
     let descriptor = &image.texture_descriptor;
 

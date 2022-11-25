@@ -228,6 +228,7 @@ pub fn flip_normals_hierarchy(
 }
 
 pub fn flip_normals(
+    mut commands: Commands,
     flip_normals_query: Query<Entity, With<FlipNormals>>,
     children_query: Query<&Children>,
     has_std_mat: Query<&Handle<StandardMaterial>>,
@@ -237,5 +238,6 @@ pub fn flip_normals(
         if let Ok(children) = children_query.get(entity) {
             flip_normals_hierarchy(children, &children_query, &has_std_mat, &mut materials);
         }
+        commands.entity(entity).remove::<FlipNormals>();
     }
 }
