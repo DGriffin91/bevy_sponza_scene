@@ -269,12 +269,12 @@ pub fn proc_scene(
 
                 // Sponza has a bunch of lights by default
                 if lights.get(entity).is_ok() {
-                    commands.entity(entity).despawn();
+                    commands.entity(entity).despawn_recursive();
                 }
 
                 // Sponza has a bunch of cameras by default
                 if cameras.get(entity).is_ok() {
-                    commands.entity(entity).despawn();
+                    commands.entity(entity).despawn_recursive();
                 }
             });
             commands.entity(entity).remove::<PostProcScene>();
