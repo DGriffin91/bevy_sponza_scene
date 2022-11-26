@@ -8,6 +8,7 @@ bevy = { version = "0.9", features = ["ktx2", "zstd"] }
 image = "0.24"
 anyhow = "1.0"
 threadpool = "1.8"
+futures-lite = "1.12"
 
 [profile.dev.package."*"]
 opt-level = 3
