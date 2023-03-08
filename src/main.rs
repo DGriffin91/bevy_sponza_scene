@@ -27,16 +27,13 @@ pub fn main() {
 
     let mut app = App::new();
 
-    app.insert_resource(Msaa { samples: 1 })
+    app.insert_resource(Msaa::Off)
         .insert_resource(ClearColor(Color::rgb(1.75, 1.9, 1.99)))
         .insert_resource(AmbientLight {
             color: Color::rgb(1.0, 1.0, 1.0),
             brightness: 0.02,
         })
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            window: WindowDescriptor { ..default() },
-            ..default()
-        }))
+        .add_plugins(DefaultPlugins)
         //.add_plugin(LogDiagnosticsPlugin::default())
         //.add_plugin(FrameTimeDiagnosticsPlugin::default())
         .add_plugin(CameraControllerPlugin)
@@ -80,7 +77,6 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         .insert(PostProcScene);
 
     // Sun
-    const HALF_SIZE: f32 = 20.0;
     commands
         .spawn(DirectionalLightBundle {
             transform: Transform::from_rotation(Quat::from_euler(
@@ -92,15 +88,6 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             directional_light: DirectionalLight {
                 color: Color::rgb(1.0, 1.0, 0.99),
                 illuminance: 400000.0,
-                shadow_projection: OrthographicProjection {
-                    left: -HALF_SIZE,
-                    right: HALF_SIZE,
-                    bottom: -HALF_SIZE,
-                    top: HALF_SIZE,
-                    near: -10.0 * HALF_SIZE,
-                    far: 10.0 * HALF_SIZE,
-                    ..default()
-                },
                 shadows_enabled: true,
                 shadow_depth_bias: 0.3,
                 shadow_normal_bias: 0.7,
@@ -217,12 +204,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 }),
                 ..default()
             },
-            BloomSettings {
-                threshold: 0.1,
-                knee: 0.1,
-                scale: 1.0,
-                intensity: 0.01,
-            },
+            BloomSettings::NATURAL,
         ))
         .insert(CameraController::default().print_controls())
         .insert(Fxaa::default());
