@@ -1,10 +1,13 @@
-use std::{f32::consts::PI, num::NonZeroU8};
+use std::f32::consts::PI;
 
 mod camera_controller;
 mod mipmap_generator;
 
 use bevy::{
-    core_pipeline::{bloom::BloomSettings, fxaa::Fxaa},
+    core_pipeline::{
+        bloom::BloomSettings,
+        experimental::taa::{TemporalAntiAliasBundle, TemporalAntiAliasPlugin},
+    },
     prelude::*,
 };
 use camera_controller::{CameraController, CameraControllerPlugin};
@@ -36,17 +39,19 @@ pub fn main() {
         .add_plugins(DefaultPlugins)
         //.add_plugin(LogDiagnosticsPlugin::default())
         //.add_plugin(FrameTimeDiagnosticsPlugin::default())
-        .add_plugin(CameraControllerPlugin)
         // Generating mipmaps takes a minute
         .insert_resource(MipmapGeneratorSettings {
-            anisotropic_filtering: NonZeroU8::new(16),
+            anisotropic_filtering: 16,
             ..default()
         })
-        .add_plugin(MipmapGeneratorPlugin)
+        .add_plugins((
+            MipmapGeneratorPlugin,
+            CameraControllerPlugin,
+            TemporalAntiAliasPlugin,
+        ))
         // Mipmap generation be skipped if ktx2 is used
-        .add_system(generate_mipmaps::<StandardMaterial>)
-        .add_startup_system(setup)
-        .add_system(proc_scene);
+        .add_systems(Update, (generate_mipmaps::<StandardMaterial>, proc_scene))
+        .add_systems(Startup, setup);
 
     app.run();
 }
@@ -61,24 +66,26 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     println!("Loading models, generating mipmaps");
 
     // sponza
-    commands
-        .spawn(SceneBundle {
+    commands.spawn((
+        SceneBundle {
             scene: asset_server.load("main_sponza/NewSponza_Main_glTF_002.gltf#Scene0"),
             ..default()
-        })
-        .insert(PostProcScene);
+        },
+        PostProcScene,
+    ));
 
     // curtains
-    commands
-        .spawn(SceneBundle {
+    commands.spawn((
+        SceneBundle {
             scene: asset_server.load("PKG_A_Curtains/NewSponza_Curtains_glTF.gltf#Scene0"),
             ..default()
-        })
-        .insert(PostProcScene);
+        },
+        PostProcScene,
+    ));
 
     // Sun
-    commands
-        .spawn(DirectionalLightBundle {
+    commands.spawn((
+        DirectionalLightBundle {
             transform: Transform::from_rotation(Quat::from_euler(
                 EulerRot::XYZ,
                 PI * -0.43,
@@ -93,12 +100,13 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 shadow_normal_bias: 0.7,
             },
             ..default()
-        })
-        .insert(GrifLight);
+        },
+        GrifLight,
+    ));
 
     // Sun Refl
-    commands
-        .spawn(SpotLightBundle {
+    commands.spawn((
+        SpotLightBundle {
             transform: Transform::from_xyz(2.0, -0.0, -2.0)
                 .looking_at(Vec3::new(0.0, 999.0, 0.0), Vec3::X),
             spot_light: SpotLight {
@@ -111,12 +119,13 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 ..default()
             },
             ..default()
-        })
-        .insert(GrifLight);
+        },
+        GrifLight,
+    ));
 
     // Sun refl 2nd bounce / misc bounces
-    commands
-        .spawn(SpotLightBundle {
+    commands.spawn((
+        SpotLightBundle {
             transform: Transform::from_xyz(2.0, 5.5, -2.0)
                 .looking_at(Vec3::new(0.0, -999.0, 0.0), Vec3::X),
             spot_light: SpotLight {
@@ -129,13 +138,14 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 ..default()
             },
             ..default()
-        })
-        .insert(GrifLight);
+        },
+        GrifLight,
+    ));
 
     // sky
     // seems to be making blocky artifacts. Even if it's the only light.
-    commands
-        .spawn(PointLightBundle {
+    commands.spawn((
+        PointLightBundle {
             point_light: PointLight {
                 color: Color::rgb(0.8, 0.9, 0.97),
                 intensity: 100000.0,
@@ -146,12 +156,13 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             },
             transform: Transform::from_xyz(0.0, 30.0, 0.0),
             ..default()
-        })
-        .insert(GrifLight);
+        },
+        GrifLight,
+    ));
 
     // sky refl
-    commands
-        .spawn(SpotLightBundle {
+    commands.spawn((
+        SpotLightBundle {
             transform: Transform::from_xyz(0.0, -2.0, 0.0)
                 .looking_at(Vec3::new(0.0, 999.0, 0.0), Vec3::X),
             spot_light: SpotLight {
@@ -164,12 +175,13 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 ..default()
             },
             ..default()
-        })
-        .insert(GrifLight);
+        },
+        GrifLight,
+    ));
 
     // sky low
-    commands
-        .spawn(SpotLightBundle {
+    commands.spawn((
+        SpotLightBundle {
             transform: Transform::from_xyz(3.0, 2.0, 0.0)
                 .looking_at(Vec3::new(0.0, -999.0, 0.0), Vec3::X),
             spot_light: SpotLight {
@@ -183,31 +195,34 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 ..default()
             },
             ..default()
-        })
-        .insert(GrifLight);
+        },
+        GrifLight,
+    ));
 
     // Camera
-    commands
-        .spawn((
-            Camera3dBundle {
-                camera: Camera {
-                    hdr: true,
-                    ..default()
-                },
-                transform: Transform::from_xyz(-10.5, 1.7, -1.0)
-                    .looking_at(Vec3::new(0.0, 3.5, 0.0), Vec3::Y),
-                projection: Projection::Perspective(PerspectiveProjection {
-                    fov: std::f32::consts::PI / 3.0,
-                    near: 0.1,
-                    far: 1000.0,
-                    aspect_ratio: 1.0,
-                }),
+    commands.spawn((
+        Camera3dBundle {
+            camera: Camera {
+                hdr: true,
                 ..default()
             },
-            BloomSettings::NATURAL,
-        ))
-        .insert(CameraController::default().print_controls())
-        .insert(Fxaa::default());
+            transform: Transform::from_xyz(-10.5, 1.7, -1.0)
+                .looking_at(Vec3::new(0.0, 3.5, 0.0), Vec3::Y),
+            projection: Projection::Perspective(PerspectiveProjection {
+                fov: std::f32::consts::PI / 3.0,
+                near: 0.1,
+                far: 1000.0,
+                aspect_ratio: 1.0,
+            }),
+            ..default()
+        },
+        BloomSettings {
+            intensity: 0.05,
+            ..default()
+        },
+        CameraController::default().print_controls(),
+        TemporalAntiAliasBundle::default(),
+    ));
 }
 
 pub fn all_children<F: FnMut(Entity)>(
