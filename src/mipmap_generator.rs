@@ -1,11 +1,13 @@
 // Copied from https://github.com/DGriffin91/bevy_mod_mipmap_generator
 
+use std::mem;
+
 use anyhow::anyhow;
 
 use bevy::{
     prelude::*,
     render::{
-        render_resource::{Extent3d, TextureDimension, TextureFormat},
+        render_resource::{Extent3d, TextureDimension, TextureFormat, TextureDescriptor},
         texture::{ImageSampler, ImageSamplerDescriptor},
     },
     tasks::{AsyncComputeTaskPool, Task},
@@ -54,7 +56,7 @@ impl Plugin for MipmapGeneratorPlugin {
 }
 
 #[derive(Resource, Default, Deref, DerefMut)]
-pub struct MipmapTasks<M: Material + GetImages>(HashMap<Handle<Image>, (Task<Image>, Handle<M>)>);
+pub struct MipmapTasks<M: Material + GetImages>(HashMap<Handle<Image>, (Task<anyhow::Result<Image>>, Handle<M>)>);
 
 #[allow(clippy::too_many_arguments)]
 pub fn generate_mipmaps<M: Material + GetImages>(
@@ -104,14 +106,10 @@ pub fn generate_mipmaps<M: Material + GetImages>(
                     if image.texture_descriptor.mip_level_count == 1
                         && check_image_compatible(image).is_ok()
                     {
-                        let mut image = image.clone();
+                        let image = image.clone();
                         let settings = settings.clone();
                         let task = thread_pool.spawn(async move {
-                            match generate_mips_texture(&mut image, &settings.clone()) {
-                                Ok(_) => (),
-                                Err(e) => warn!("{}", e),
-                            }
-                            image
+                            generate_mips_texture(image, &settings.clone())
                         });
                         tasks.insert(image_h.clone(), (task, Handle::Weak(material_h.clone())));
                     }
@@ -124,12 +122,17 @@ pub fn generate_mipmaps<M: Material + GetImages>(
 
     for (image_h, inner) in tasks.iter_mut() {
         // TODO couldn't get &mut in destructure to work correctly for (task, material_h)
-        if let Some(new_image) = future::block_on(future::poll_once(&mut inner.0)) {
-            if let Some(image) = images.get_mut(image_h) {
-                *image = new_image;
+        if let Some(result) = future::block_on(future::poll_once(&mut inner.0)) {
+            match result {
+                Ok(new_image) => {
+                    if let Some(image) = images.get_mut(image_h) {
+                        *image = new_image;
+                    }
+                    // Touch material to trigger change detection
+                    let _ = materials.get_mut(&inner.1);
+                }
+                Err(e) => warn!("Failed to generate mipmap: {}", e)
             }
-            // Touch material to trigger change detection
-            let _ = materials.get_mut(&inner.1);
             completed.push(image_h.clone());
         }
     }
@@ -144,24 +147,21 @@ pub fn generate_mipmaps<M: Material + GetImages>(
 }
 
 pub fn generate_mips_texture(
-    image: &mut Image,
+    mut image: Image,
     settings: &MipmapGeneratorSettings,
-) -> anyhow::Result<()> {
-    check_image_compatible(image)?;
-    match try_into_dynamic(image.clone()) {
-        Ok(mut dyn_image) => {
-            let (mip_level_count, image_data) = generate_mips(
-                &mut dyn_image,
-                settings.minimum_mip_resolution,
-                u32::MAX,
-                settings.filter_type,
-            );
-            image.texture_descriptor.mip_level_count = mip_level_count;
-            image.data = image_data;
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
+) -> anyhow::Result<Image> {
+    check_image_compatible(&image)?;
+    let image_data = mem::replace(&mut image.data, Vec::new());
+    let mut dyn_image = try_into_dynamic(image_data, &image.texture_descriptor)?;
+    let (mip_level_count, image_data) = generate_mips(
+        &mut dyn_image,
+        settings.minimum_mip_resolution,
+        u32::MAX,
+        settings.filter_type,
+    );
+    image.texture_descriptor.mip_level_count = mip_level_count;
+    image.data = image_data;
+    Ok(image)
 }
 
 /// Returns the number of mip levels, and a vec of bytes containing the image data.
@@ -283,30 +283,30 @@ impl GetImages for StandardMaterial {
     }
 }
 
-pub fn try_into_dynamic(image: Image) -> anyhow::Result<DynamicImage> {
-    match image.texture_descriptor.format {
+fn try_into_dynamic(image_data: Vec<u8>, texture_descriptor: &TextureDescriptor) -> anyhow::Result<DynamicImage> {
+    match texture_descriptor.format {
         TextureFormat::R8Unorm => ImageBuffer::from_raw(
-            image.texture_descriptor.size.width,
-            image.texture_descriptor.size.height,
-            image.data,
+            texture_descriptor.size.width,
+            texture_descriptor.size.height,
+            image_data,
         )
         .map(DynamicImage::ImageLuma8),
         TextureFormat::Rg8Unorm => ImageBuffer::from_raw(
-            image.texture_descriptor.size.width,
-            image.texture_descriptor.size.height,
-            image.data,
+            texture_descriptor.size.width,
+            texture_descriptor.size.height,
+            image_data,
         )
         .map(DynamicImage::ImageLumaA8),
         TextureFormat::Rgba8UnormSrgb => ImageBuffer::from_raw(
-            image.texture_descriptor.size.width,
-            image.texture_descriptor.size.height,
-            image.data,
+            texture_descriptor.size.width,
+            texture_descriptor.size.height,
+            image_data,
         )
         .map(DynamicImage::ImageRgba8),
         TextureFormat::Rgba8Unorm => ImageBuffer::from_raw(
-            image.texture_descriptor.size.width,
-            image.texture_descriptor.size.height,
-            image.data,
+            texture_descriptor.size.width,
+            texture_descriptor.size.height,
+            image_data,
         )
         .map(DynamicImage::ImageRgba8),
         // Throw and error if conversion isn't supported
@@ -320,7 +320,7 @@ pub fn try_into_dynamic(image: Image) -> anyhow::Result<DynamicImage> {
     .ok_or_else(|| {
         anyhow!(
             "Failed to convert into {:?}.",
-            image.texture_descriptor.format
+            texture_descriptor.format
         )
     })
 }
