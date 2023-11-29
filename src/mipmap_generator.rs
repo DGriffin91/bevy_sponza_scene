@@ -157,9 +157,9 @@ pub fn generate_mips_texture(
 ) -> anyhow::Result<Image> {
     check_image_compatible(&image)?;
     let image_data = mem::replace(&mut image.data, Vec::new());
-    let mut dyn_image = try_into_dynamic(image_data, &image.texture_descriptor)?;
+    let dyn_image = try_into_dynamic(image_data, &image.texture_descriptor)?;
     let (mip_level_count, image_data) = generate_mips(
-        &mut dyn_image,
+        dyn_image,
         settings.minimum_mip_resolution,
         u32::MAX,
         settings.filter_type,
@@ -173,24 +173,33 @@ pub fn generate_mips_texture(
 /// The `max_mip_count` includes the first input mip level. So setting this to 2 will
 /// result in a single additional mip level being generated, for a total of 2 levels.
 pub fn generate_mips(
-    dyn_image: &mut DynamicImage,
+    mut dyn_image: DynamicImage,
     minimum_mip_resolution: u32,
     max_mip_count: u32,
     filter_type: FilterType,
 ) -> (u32, Vec<u8>) {
-    let mut image_data = dyn_image.as_bytes().to_vec();
     let mut mip_level_count = 1;
-    let mut width = dyn_image.width();
-    let mut height = dyn_image.height();
 
-    while width / 2 >= minimum_mip_resolution.max(1)
-        && height / 2 >= minimum_mip_resolution.max(1)
+    // Make resized image copy
+    let mut width = dyn_image.width() / 2;
+    let mut height = dyn_image.height() / 2;
+    let new_dyn_image = dyn_image.resize_exact(width, height, filter_type);
+    // Move original image data to the result vector avoiding clone of potentially big chunk of memory
+    let mut image_data = dyn_image.into_bytes();
+    // Continue with smaller image
+    dyn_image = new_dyn_image;
+
+    while width >= minimum_mip_resolution.max(1)
+        && height >= minimum_mip_resolution.max(1)
         && mip_level_count < max_mip_count
     {
+        // create resized image copy
         width /= 2;
         height /= 2;
-        *dyn_image = dyn_image.resize_exact(width, height, filter_type);
-        image_data.append(&mut dyn_image.as_bytes().to_vec());
+        let new_dyn_image = dyn_image.resize_exact(width, height, filter_type);
+        // append image from the previous loop iteration to the result vector
+        image_data.append(&mut dyn_image.into_bytes());
+        dyn_image = new_dyn_image;
         mip_level_count += 1;
     }
 
