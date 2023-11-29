@@ -25,6 +25,7 @@ pub struct MipmapGeneratorSettings {
     pub anisotropic_filtering: u16,
     pub filter_type: FilterType,
     pub minimum_mip_resolution: u32,
+    pub max_parallelism: usize,
 }
 
 ///Mipmaps will not be generated for materials found on entities that also have the `NoMipmapGeneration` component.
@@ -38,6 +39,7 @@ impl Default for MipmapGeneratorSettings {
             anisotropic_filtering: 8,
             filter_type: FilterType::Triangle,
             minimum_mip_resolution: 1,
+            max_parallelism: usize::MAX,
         }
     }
 }
@@ -95,6 +97,9 @@ pub fn generate_mipmaps<M: Material + GetImages>(
             for image_h in material.get_images().into_iter() {
                 if tasks.contains_key(image_h) {
                     continue; //There is already a task for this image
+                }
+                if tasks.len() > settings.max_parallelism {
+                    break; // Enough threads are running currently, let's continue in another frame
                 }
                 if let Some(image) = images.get_mut(image_h) {
                     let mut descriptor = match image.sampler.clone() {

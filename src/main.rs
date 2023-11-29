@@ -42,6 +42,7 @@ pub fn main() {
         // Generating mipmaps takes a minute
         .insert_resource(MipmapGeneratorSettings {
             anisotropic_filtering: 16,
+            max_parallelism: 8,
             ..default()
         })
         .add_plugins((
