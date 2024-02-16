@@ -8,7 +8,10 @@ use bevy::{
         bloom::BloomSettings,
         experimental::taa::{TemporalAntiAliasBundle, TemporalAntiAliasPlugin},
     },
+    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
+    pbr::ScreenSpaceAmbientOcclusionBundle,
     prelude::*,
+    window::PresentMode,
 };
 use camera_controller::{CameraController, CameraControllerPlugin};
 use mipmap_generator::{generate_mipmaps, MipmapGeneratorPlugin, MipmapGeneratorSettings};
@@ -36,9 +39,17 @@ pub fn main() {
             color: Color::rgb(1.0, 1.0, 1.0),
             brightness: 0.02,
         })
-        .add_plugins(DefaultPlugins)
-        //.add_plugin(LogDiagnosticsPlugin::default())
-        //.add_plugin(FrameTimeDiagnosticsPlugin::default())
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                present_mode: PresentMode::Immediate,
+                ..default()
+            }),
+            ..default()
+        }))
+        .add_plugins((
+            LogDiagnosticsPlugin::default(),
+            FrameTimeDiagnosticsPlugin::default(),
+        ))
         // Generating mipmaps takes a minute
         .insert_resource(MipmapGeneratorSettings {
             anisotropic_filtering: 16,
@@ -200,29 +211,31 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     ));
 
     // Camera
-    commands.spawn((
-        Camera3dBundle {
-            camera: Camera {
-                hdr: true,
+    commands
+        .spawn((
+            Camera3dBundle {
+                camera: Camera {
+                    hdr: true,
+                    ..default()
+                },
+                transform: Transform::from_xyz(-10.5, 1.7, -1.0)
+                    .looking_at(Vec3::new(0.0, 3.5, 0.0), Vec3::Y),
+                projection: Projection::Perspective(PerspectiveProjection {
+                    fov: std::f32::consts::PI / 3.0,
+                    near: 0.1,
+                    far: 1000.0,
+                    aspect_ratio: 1.0,
+                }),
                 ..default()
             },
-            transform: Transform::from_xyz(-10.5, 1.7, -1.0)
-                .looking_at(Vec3::new(0.0, 3.5, 0.0), Vec3::Y),
-            projection: Projection::Perspective(PerspectiveProjection {
-                fov: std::f32::consts::PI / 3.0,
-                near: 0.1,
-                far: 1000.0,
-                aspect_ratio: 1.0,
-            }),
-            ..default()
-        },
-        BloomSettings {
-            intensity: 0.05,
-            ..default()
-        },
-        CameraController::default().print_controls(),
-        TemporalAntiAliasBundle::default(),
-    ));
+            BloomSettings {
+                intensity: 0.05,
+                ..default()
+            },
+            CameraController::default().print_controls(),
+            TemporalAntiAliasBundle::default(),
+        ))
+        .insert(ScreenSpaceAmbientOcclusionBundle::default());
 }
 
 pub fn all_children<F: FnMut(Entity)>(
