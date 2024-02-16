@@ -105,7 +105,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             )),
             directional_light: DirectionalLight {
                 color: Color::rgb(1.0, 1.0, 0.99),
-                illuminance: 400000.0 * 0.2,
+                illuminance: 300000.0 * 0.2,
                 shadows_enabled: true,
                 shadow_depth_bias: 0.3,
                 shadow_normal_bias: 0.7,
@@ -124,7 +124,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 .looking_at(Vec3::new(0.0, 999.0, 0.0), Vec3::X),
             spot_light: SpotLight {
                 range: 15.0,
-                intensity: 1000.0 * point_spot_mult,
+                intensity: 700.0 * point_spot_mult,
                 color: Color::rgb(1.0, 0.97, 0.85),
                 shadows_enabled: false,
                 inner_angle: PI * 0.4,
@@ -143,7 +143,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 .looking_at(Vec3::new(0.0, -999.0, 0.0), Vec3::X),
             spot_light: SpotLight {
                 range: 13.0,
-                intensity: 800.0 * point_spot_mult,
+                intensity: 500.0 * point_spot_mult,
                 color: Color::rgb(1.0, 0.97, 0.85),
                 shadows_enabled: false,
                 inner_angle: PI * 0.3,
@@ -161,7 +161,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         PointLightBundle {
             point_light: PointLight {
                 color: Color::rgb(0.8, 0.9, 0.97),
-                intensity: 100000.0 * point_spot_mult,
+                intensity: 10000.0 * point_spot_mult,
                 shadows_enabled: false,
                 range: 24.0,
                 radius: 3.0,
@@ -180,7 +180,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 .looking_at(Vec3::new(0.0, 999.0, 0.0), Vec3::X),
             spot_light: SpotLight {
                 range: 11.0,
-                intensity: 300.0 * point_spot_mult,
+                intensity: 40.0 * point_spot_mult,
                 color: Color::rgb(0.8, 0.9, 0.97),
                 shadows_enabled: false,
                 inner_angle: PI * 0.46,
@@ -200,7 +200,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             spot_light: SpotLight {
                 range: 12.0,
                 radius: 0.0,
-                intensity: 1800.0 * point_spot_mult,
+                intensity: 600.0 * point_spot_mult,
                 color: Color::rgb(0.8, 0.9, 0.95),
                 shadows_enabled: false,
                 inner_angle: PI * 0.34,
@@ -233,6 +233,11 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             BloomSettings {
                 intensity: 0.05,
                 ..default()
+            },
+            EnvironmentMapLight {
+                diffuse_map: asset_server.load("environment_maps/pisa_diffuse_rgb9e5_zstd.ktx2"),
+                specular_map: asset_server.load("environment_maps/pisa_specular_rgb9e5_zstd.ktx2"),
+                intensity: 250.0,
             },
             CameraController::default().print_controls(),
             TemporalAntiAliasBundle::default(),
