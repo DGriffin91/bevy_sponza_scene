@@ -8,7 +8,10 @@ use bevy::{
         bloom::BloomSettings,
         experimental::taa::{TemporalAntiAliasBundle, TemporalAntiAliasPlugin},
     },
+    diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
+    pbr::ScreenSpaceAmbientOcclusionBundle,
     prelude::*,
+    window::PresentMode,
 };
 use camera_controller::{CameraController, CameraControllerPlugin};
 use mipmap_generator::{generate_mipmaps, MipmapGeneratorPlugin, MipmapGeneratorSettings};
@@ -36,9 +39,17 @@ pub fn main() {
             color: Color::rgb(1.0, 1.0, 1.0),
             brightness: 0.02,
         })
-        .add_plugins(DefaultPlugins)
-        //.add_plugin(LogDiagnosticsPlugin::default())
-        //.add_plugin(FrameTimeDiagnosticsPlugin::default())
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                present_mode: PresentMode::Immediate,
+                ..default()
+            }),
+            ..default()
+        }))
+        .add_plugins((
+            LogDiagnosticsPlugin::default(),
+            FrameTimeDiagnosticsPlugin,
+        ))
         // Generating mipmaps takes a minute
         .insert_resource(MipmapGeneratorSettings {
             anisotropic_filtering: 16,
@@ -94,7 +105,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             )),
             directional_light: DirectionalLight {
                 color: Color::rgb(1.0, 1.0, 0.99),
-                illuminance: 400000.0,
+                illuminance: 300000.0 * 0.2,
                 shadows_enabled: true,
                 shadow_depth_bias: 0.3,
                 shadow_normal_bias: 0.7,
@@ -104,6 +115,8 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         GrifLight,
     ));
 
+    let point_spot_mult = 1000.0;
+
     // Sun Refl
     commands.spawn((
         SpotLightBundle {
@@ -111,7 +124,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 .looking_at(Vec3::new(0.0, 999.0, 0.0), Vec3::X),
             spot_light: SpotLight {
                 range: 15.0,
-                intensity: 1000.0,
+                intensity: 700.0 * point_spot_mult,
                 color: Color::rgb(1.0, 0.97, 0.85),
                 shadows_enabled: false,
                 inner_angle: PI * 0.4,
@@ -130,7 +143,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 .looking_at(Vec3::new(0.0, -999.0, 0.0), Vec3::X),
             spot_light: SpotLight {
                 range: 13.0,
-                intensity: 800.0,
+                intensity: 500.0 * point_spot_mult,
                 color: Color::rgb(1.0, 0.97, 0.85),
                 shadows_enabled: false,
                 inner_angle: PI * 0.3,
@@ -148,7 +161,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         PointLightBundle {
             point_light: PointLight {
                 color: Color::rgb(0.8, 0.9, 0.97),
-                intensity: 100000.0,
+                intensity: 10000.0 * point_spot_mult,
                 shadows_enabled: false,
                 range: 24.0,
                 radius: 3.0,
@@ -167,7 +180,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 .looking_at(Vec3::new(0.0, 999.0, 0.0), Vec3::X),
             spot_light: SpotLight {
                 range: 11.0,
-                intensity: 300.0,
+                intensity: 40.0 * point_spot_mult,
                 color: Color::rgb(0.8, 0.9, 0.97),
                 shadows_enabled: false,
                 inner_angle: PI * 0.46,
@@ -187,7 +200,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             spot_light: SpotLight {
                 range: 12.0,
                 radius: 0.0,
-                intensity: 1800.0,
+                intensity: 600.0 * point_spot_mult,
                 color: Color::rgb(0.8, 0.9, 0.95),
                 shadows_enabled: false,
                 inner_angle: PI * 0.34,
@@ -200,29 +213,36 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     ));
 
     // Camera
-    commands.spawn((
-        Camera3dBundle {
-            camera: Camera {
-                hdr: true,
+    commands
+        .spawn((
+            Camera3dBundle {
+                camera: Camera {
+                    hdr: true,
+                    ..default()
+                },
+                transform: Transform::from_xyz(-10.5, 1.7, -1.0)
+                    .looking_at(Vec3::new(0.0, 3.5, 0.0), Vec3::Y),
+                projection: Projection::Perspective(PerspectiveProjection {
+                    fov: std::f32::consts::PI / 3.0,
+                    near: 0.1,
+                    far: 1000.0,
+                    aspect_ratio: 1.0,
+                }),
                 ..default()
             },
-            transform: Transform::from_xyz(-10.5, 1.7, -1.0)
-                .looking_at(Vec3::new(0.0, 3.5, 0.0), Vec3::Y),
-            projection: Projection::Perspective(PerspectiveProjection {
-                fov: std::f32::consts::PI / 3.0,
-                near: 0.1,
-                far: 1000.0,
-                aspect_ratio: 1.0,
-            }),
-            ..default()
-        },
-        BloomSettings {
-            intensity: 0.05,
-            ..default()
-        },
-        CameraController::default().print_controls(),
-        TemporalAntiAliasBundle::default(),
-    ));
+            BloomSettings {
+                intensity: 0.05,
+                ..default()
+            },
+            EnvironmentMapLight {
+                diffuse_map: asset_server.load("environment_maps/pisa_diffuse_rgb9e5_zstd.ktx2"),
+                specular_map: asset_server.load("environment_maps/pisa_specular_rgb9e5_zstd.ktx2"),
+                intensity: 250.0,
+            },
+            CameraController::default().print_controls(),
+            TemporalAntiAliasBundle::default(),
+        ))
+        .insert(ScreenSpaceAmbientOcclusionBundle::default());
 }
 
 pub fn all_children<F: FnMut(Entity)>(
