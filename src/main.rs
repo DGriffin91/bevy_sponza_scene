@@ -48,7 +48,7 @@ pub fn main() {
         }))
         .add_plugins((
             LogDiagnosticsPlugin::default(),
-            FrameTimeDiagnosticsPlugin::default(),
+            FrameTimeDiagnosticsPlugin,
         ))
         // Generating mipmaps takes a minute
         .insert_resource(MipmapGeneratorSettings {
