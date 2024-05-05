@@ -1,8 +1,12 @@
-use std::f32::consts::PI;
+use std::{f32::consts::PI, time::Instant};
 
+mod auto_instance;
 mod camera_controller;
+mod convert;
 mod mipmap_generator;
 
+use argh::FromArgs;
+use auto_instance::{AutoInstanceMaterialPlugin, AutoInstancePlugin};
 use bevy::{
     core_pipeline::{
         bloom::BloomSettings,
@@ -11,45 +15,69 @@ use bevy::{
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
     pbr::ScreenSpaceAmbientOcclusionBundle,
     prelude::*,
-    window::PresentMode,
+    render::view::NoFrustumCulling,
+    window::{PresentMode, WindowResolution},
+    winit::{UpdateMode, WinitSettings},
 };
 use camera_controller::{CameraController, CameraControllerPlugin};
 use mipmap_generator::{generate_mipmaps, MipmapGeneratorPlugin, MipmapGeneratorSettings};
 
-use crate::convert::{change_gltf_to_use_ktx2, convert_images_to_ktx2};
+use crate::{
+    auto_instance::{AutoInstanceMaterialRecursive, AutoInstanceMeshRecursive},
+    convert::{change_gltf_to_use_ktx2, convert_images_to_ktx2},
+};
 
-mod convert;
+#[derive(FromArgs, Resource, Clone)]
+/// Config
+pub struct Args {
+    /// convert gltf to use ktx
+    #[argh(switch)]
+    convert: bool,
+
+    /// enable auto instancing for meshes/materials
+    #[argh(switch)]
+    instance: bool,
+
+    /// disable bloom, AO, AA, shadows
+    #[argh(switch)]
+    minimal: bool,
+
+    /// whether to disable frustum culling.
+    #[argh(switch)]
+    no_frustum_culling: bool,
+}
 
 pub fn main() {
-    let args = &mut std::env::args();
-    args.next();
-    if let Some(arg) = &args.next() {
-        if arg == "--convert" {
-            println!("This will take a few minutes");
-            convert_images_to_ktx2();
-            change_gltf_to_use_ktx2();
-        }
+    let args: Args = argh::from_env();
+
+    if args.convert {
+        println!("This will take a few minutes");
+        convert_images_to_ktx2();
+        change_gltf_to_use_ktx2();
     }
 
     let mut app = App::new();
 
-    app.insert_resource(Msaa::Off)
+    app.insert_resource(args.clone())
+        .insert_resource(Msaa::Off)
         .insert_resource(ClearColor(Color::rgb(1.75, 1.9, 1.99)))
         .insert_resource(AmbientLight {
             color: Color::rgb(1.0, 1.0, 1.0),
             brightness: 0.02,
         })
+        .insert_resource(WinitSettings {
+            focused_mode: UpdateMode::Continuous,
+            unfocused_mode: UpdateMode::Continuous,
+        })
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 present_mode: PresentMode::Immediate,
+                resolution: WindowResolution::new(1920.0, 1080.0).with_scale_factor_override(1.0),
                 ..default()
             }),
             ..default()
         }))
-        .add_plugins((
-            LogDiagnosticsPlugin::default(),
-            FrameTimeDiagnosticsPlugin,
-        ))
+        .add_plugins((LogDiagnosticsPlugin::default(), FrameTimeDiagnosticsPlugin))
         // Generating mipmaps takes a minute
         .insert_resource(MipmapGeneratorSettings {
             anisotropic_filtering: 16,
@@ -61,8 +89,25 @@ pub fn main() {
             TemporalAntiAliasPlugin,
         ))
         // Mipmap generation be skipped if ktx2 is used
-        .add_systems(Update, (generate_mipmaps::<StandardMaterial>, proc_scene))
+        .add_systems(
+            Update,
+            (
+                generate_mipmaps::<StandardMaterial>,
+                proc_scene,
+                input,
+                benchmark,
+            ),
+        )
         .add_systems(Startup, setup);
+    if args.no_frustum_culling {
+        app.add_systems(Update, add_no_frustum_culling);
+    }
+    if args.instance {
+        app.add_plugins((
+            AutoInstancePlugin,
+            AutoInstanceMaterialPlugin::<StandardMaterial>::default(),
+        ));
+    }
 
     app.run();
 }
@@ -73,7 +118,7 @@ pub struct PostProcScene;
 #[derive(Component)]
 pub struct GrifLight;
 
-pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<Args>) {
     println!("Loading models, generating mipmaps");
 
     // sponza
@@ -83,6 +128,8 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             ..default()
         },
         PostProcScene,
+        AutoInstanceMaterialRecursive,
+        AutoInstanceMeshRecursive,
     ));
 
     // curtains
@@ -92,6 +139,8 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             ..default()
         },
         PostProcScene,
+        AutoInstanceMaterialRecursive,
+        AutoInstanceMeshRecursive,
     ));
 
     // Sun
@@ -106,7 +155,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             directional_light: DirectionalLight {
                 color: Color::rgb(1.0, 1.0, 0.99),
                 illuminance: 300000.0 * 0.2,
-                shadows_enabled: true,
+                shadows_enabled: !args.minimal,
                 shadow_depth_bias: 0.3,
                 shadow_normal_bias: 0.7,
             },
@@ -213,36 +262,39 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     ));
 
     // Camera
-    commands
-        .spawn((
-            Camera3dBundle {
-                camera: Camera {
-                    hdr: true,
-                    ..default()
-                },
-                transform: Transform::from_xyz(-10.5, 1.7, -1.0)
-                    .looking_at(Vec3::new(0.0, 3.5, 0.0), Vec3::Y),
-                projection: Projection::Perspective(PerspectiveProjection {
-                    fov: std::f32::consts::PI / 3.0,
-                    near: 0.1,
-                    far: 1000.0,
-                    aspect_ratio: 1.0,
-                }),
+    let mut cam = commands.spawn((
+        Camera3dBundle {
+            camera: Camera {
+                hdr: true,
                 ..default()
             },
+            transform: Transform::from_xyz(-10.5, 1.7, -1.0)
+                .looking_at(Vec3::new(0.0, 3.5, 0.0), Vec3::Y),
+            projection: Projection::Perspective(PerspectiveProjection {
+                fov: std::f32::consts::PI / 3.0,
+                near: 0.1,
+                far: 1000.0,
+                aspect_ratio: 1.0,
+            }),
+            ..default()
+        },
+        EnvironmentMapLight {
+            diffuse_map: asset_server.load("environment_maps/pisa_diffuse_rgb9e5_zstd.ktx2"),
+            specular_map: asset_server.load("environment_maps/pisa_specular_rgb9e5_zstd.ktx2"),
+            intensity: 250.0,
+        },
+    ));
+    if !args.minimal {
+        cam.insert((
             BloomSettings {
                 intensity: 0.05,
                 ..default()
-            },
-            EnvironmentMapLight {
-                diffuse_map: asset_server.load("environment_maps/pisa_diffuse_rgb9e5_zstd.ktx2"),
-                specular_map: asset_server.load("environment_maps/pisa_specular_rgb9e5_zstd.ktx2"),
-                intensity: 250.0,
             },
             CameraController::default().print_controls(),
             TemporalAntiAliasBundle::default(),
         ))
         .insert(ScreenSpaceAmbientOcclusionBundle::default());
+    }
 }
 
 pub fn all_children<F: FnMut(Entity)>(
@@ -296,5 +348,93 @@ pub fn proc_scene(
             });
             commands.entity(entity).remove::<PostProcScene>();
         }
+    }
+}
+
+const CAM_POS_1: Transform = Transform {
+    translation: Vec3::new(-10.5, 1.7, -1.0),
+    rotation: Quat::from_array([-0.05678932, 0.7372272, -0.062454797, -0.670351]),
+    scale: Vec3::ONE,
+};
+
+const CAM_POS_2: Transform = Transform {
+    translation: Vec3::new(11.901049, 6.9060106, -4.561092),
+    rotation: Quat::from_array([-0.0066631963, -0.86618143, 0.011553433, -0.49955168]),
+    scale: Vec3::ONE,
+};
+
+const CAM_POS_3: Transform = Transform {
+    translation: Vec3::new(19.087378, 1.4913027, -2.7349238),
+    rotation: Quat::from_array([0.017711632, 0.7889913, -0.022769613, 0.61372685]),
+    scale: Vec3::ONE,
+};
+
+fn input(input: Res<ButtonInput<KeyCode>>, mut camera: Query<&mut Transform, With<Camera>>) {
+    let Ok(mut transform) = camera.get_single_mut() else {
+        return;
+    };
+    if input.just_pressed(KeyCode::KeyI) {
+        info!("{:?}", transform);
+    }
+    if input.just_pressed(KeyCode::Digit1) {
+        *transform = CAM_POS_1
+    }
+    if input.just_pressed(KeyCode::Digit2) {
+        *transform = CAM_POS_2
+    }
+    if input.just_pressed(KeyCode::Digit3) {
+        *transform = CAM_POS_3
+    }
+}
+
+fn benchmark(
+    input: Res<ButtonInput<KeyCode>>,
+    mut camera: Query<&mut Transform, With<Camera>>,
+    mut bench_started: Local<Option<Instant>>,
+    mut bench_frame: Local<u32>,
+    mut count_per_step: Local<u32>,
+    time: Res<Time>,
+) {
+    if input.just_pressed(KeyCode::KeyB) && bench_started.is_none() {
+        *bench_started = Some(Instant::now());
+        *bench_frame = 0;
+        // Try to render for around 2s or at least 30 frames per step
+        *count_per_step = ((2.0 / time.delta_seconds()) as u32).max(30);
+        println!(
+            "Starting Benchmark with {} frames per step",
+            *count_per_step
+        );
+    }
+    if bench_started.is_none() {
+        return;
+    }
+    let Ok(mut transform) = camera.get_single_mut() else {
+        return;
+    };
+    if *bench_frame == 0 {
+        *transform = CAM_POS_1
+    } else if *bench_frame == *count_per_step {
+        *transform = CAM_POS_2
+    } else if *bench_frame == *count_per_step * 2 {
+        *transform = CAM_POS_3
+    } else if *bench_frame == *count_per_step * 3 {
+        let elapsed = bench_started.unwrap().elapsed().as_secs_f32();
+        println!(
+            "Benchmark avg cpu frame time: {:.2}ms",
+            (elapsed / *bench_frame as f32) * 1000.0
+        );
+        *bench_started = None;
+        *bench_frame = 0;
+        *transform = CAM_POS_1;
+    }
+    *bench_frame += 1;
+}
+
+pub fn add_no_frustum_culling(
+    mut commands: Commands,
+    convert_query: Query<Entity, (Without<NoFrustumCulling>, With<Handle<StandardMaterial>>)>,
+) {
+    for entity in convert_query.iter() {
+        commands.entity(entity).insert(NoFrustumCulling);
     }
 }
