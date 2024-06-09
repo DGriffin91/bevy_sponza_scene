@@ -1,12 +1,14 @@
 // Copied from https://github.com/DGriffin91/bevy_mod_mipmap_generator
 
+use std::mem;
+
 use anyhow::anyhow;
 
 use bevy::render::render_asset::RenderAssetUsages;
 use bevy::{
     prelude::*,
     render::{
-        render_resource::{Extent3d, TextureDimension, TextureFormat},
+        render_resource::{Extent3d, TextureDimension, TextureFormat, TextureDescriptor},
         texture::{ImageSampler, ImageSamplerDescriptor},
     },
     tasks::{AsyncComputeTaskPool, Task},
@@ -24,6 +26,7 @@ pub struct MipmapGeneratorSettings {
     pub anisotropic_filtering: u16,
     pub filter_type: FilterType,
     pub minimum_mip_resolution: u32,
+    pub max_parallelism: usize,
 }
 
 ///Mipmaps will not be generated for materials found on entities that also have the `NoMipmapGeneration` component.
@@ -37,6 +40,7 @@ impl Default for MipmapGeneratorSettings {
             anisotropic_filtering: 8,
             filter_type: FilterType::Triangle,
             minimum_mip_resolution: 1,
+            max_parallelism: usize::MAX,
         }
     }
 }
@@ -55,7 +59,7 @@ impl Plugin for MipmapGeneratorPlugin {
 }
 
 #[derive(Resource, Default, Deref, DerefMut)]
-pub struct MipmapTasks<M: Material + GetImages>(HashMap<Handle<Image>, (Task<Image>, Handle<M>)>);
+pub struct MipmapTasks<M: Material + GetImages>(HashMap<Handle<Image>, (Task<anyhow::Result<Image>>, Handle<M>)>);
 
 #[allow(clippy::too_many_arguments)]
 pub fn generate_mipmaps<M: Material + GetImages>(
@@ -95,6 +99,9 @@ pub fn generate_mipmaps<M: Material + GetImages>(
                 if tasks.contains_key(image_h) {
                     continue; //There is already a task for this image
                 }
+                if tasks.len() > settings.max_parallelism {
+                    break; // Enough threads are running currently, let's continue in another frame
+                }
                 if let Some(image) = images.get_mut(image_h) {
                     let mut descriptor = match image.sampler.clone() {
                         ImageSampler::Default => default_sampler.0.clone(),
@@ -105,14 +112,10 @@ pub fn generate_mipmaps<M: Material + GetImages>(
                     if image.texture_descriptor.mip_level_count == 1
                         && check_image_compatible(image).is_ok()
                     {
-                        let mut image = image.clone();
+                        let image = image.clone();
                         let settings = settings.clone();
                         let task = thread_pool.spawn(async move {
-                            match generate_mips_texture(&mut image, &settings.clone()) {
-                                Ok(_) => (),
-                                Err(e) => warn!("{}", e),
-                            }
-                            image
+                            generate_mips_texture(image, &settings.clone())
                         });
                         tasks.insert(image_h.clone(), (task, Handle::Weak(*material_h)));
                     }
@@ -125,12 +128,17 @@ pub fn generate_mipmaps<M: Material + GetImages>(
 
     for (image_h, inner) in tasks.iter_mut() {
         // TODO couldn't get &mut in destructure to work correctly for (task, material_h)
-        if let Some(new_image) = future::block_on(future::poll_once(&mut inner.0)) {
-            if let Some(image) = images.get_mut(image_h) {
-                *image = new_image;
+        if let Some(result) = future::block_on(future::poll_once(&mut inner.0)) {
+            match result {
+                Ok(new_image) => {
+                    if let Some(image) = images.get_mut(image_h) {
+                        *image = new_image;
+                    }
+                    // Touch material to trigger change detection
+                    let _ = materials.get_mut(&inner.1);
+                }
+                Err(e) => warn!("Failed to generate mipmap: {}", e)
             }
-            // Touch material to trigger change detection
-            let _ = materials.get_mut(&inner.1);
             completed.push(image_h.clone());
         }
     }
@@ -145,48 +153,54 @@ pub fn generate_mipmaps<M: Material + GetImages>(
 }
 
 pub fn generate_mips_texture(
-    image: &mut Image,
+    mut image: Image,
     settings: &MipmapGeneratorSettings,
-) -> anyhow::Result<()> {
-    check_image_compatible(image)?;
-    match try_into_dynamic(image.clone()) {
-        Ok(mut dyn_image) => {
-            let (mip_level_count, image_data) = generate_mips(
-                &mut dyn_image,
-                settings.minimum_mip_resolution,
-                u32::MAX,
-                settings.filter_type,
-            );
-            image.texture_descriptor.mip_level_count = mip_level_count;
-            image.data = image_data;
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
+) -> anyhow::Result<Image> {
+    check_image_compatible(&image)?;
+    let image_data = mem::replace(&mut image.data, Vec::new());
+    let dyn_image = try_into_dynamic(image_data, &image.texture_descriptor)?;
+    let (mip_level_count, image_data) = generate_mips(
+        dyn_image,
+        settings.minimum_mip_resolution,
+        u32::MAX,
+        settings.filter_type,
+    );
+    image.texture_descriptor.mip_level_count = mip_level_count;
+    image.data = image_data;
+    Ok(image)
 }
 
 /// Returns the number of mip levels, and a vec of bytes containing the image data.
 /// The `max_mip_count` includes the first input mip level. So setting this to 2 will
 /// result in a single additional mip level being generated, for a total of 2 levels.
 pub fn generate_mips(
-    dyn_image: &mut DynamicImage,
+    mut dyn_image: DynamicImage,
     minimum_mip_resolution: u32,
     max_mip_count: u32,
     filter_type: FilterType,
 ) -> (u32, Vec<u8>) {
-    let mut image_data = dyn_image.as_bytes().to_vec();
     let mut mip_level_count = 1;
-    let mut width = dyn_image.width();
-    let mut height = dyn_image.height();
 
-    while width / 2 >= minimum_mip_resolution.max(1)
-        && height / 2 >= minimum_mip_resolution.max(1)
+    // Make resized image copy
+    let mut width = dyn_image.width() / 2;
+    let mut height = dyn_image.height() / 2;
+    let new_dyn_image = dyn_image.resize_exact(width, height, filter_type);
+    // Move original image data to the result vector avoiding clone of potentially big chunk of memory
+    let mut image_data = dyn_image.into_bytes();
+    // Continue with smaller image
+    dyn_image = new_dyn_image;
+
+    while width >= minimum_mip_resolution.max(1)
+        && height >= minimum_mip_resolution.max(1)
         && mip_level_count < max_mip_count
     {
+        // create resized image copy
         width /= 2;
         height /= 2;
-        *dyn_image = dyn_image.resize_exact(width, height, filter_type);
-        image_data.append(&mut dyn_image.as_bytes().to_vec());
+        let new_dyn_image = dyn_image.resize_exact(width, height, filter_type);
+        // append image from the previous loop iteration to the result vector
+        image_data.append(&mut dyn_image.into_bytes());
+        dyn_image = new_dyn_image;
         mip_level_count += 1;
     }
 
@@ -285,30 +299,30 @@ impl GetImages for StandardMaterial {
     }
 }
 
-pub fn try_into_dynamic(image: Image) -> anyhow::Result<DynamicImage> {
-    match image.texture_descriptor.format {
+fn try_into_dynamic(image_data: Vec<u8>, texture_descriptor: &TextureDescriptor) -> anyhow::Result<DynamicImage> {
+    match texture_descriptor.format {
         TextureFormat::R8Unorm => ImageBuffer::from_raw(
-            image.texture_descriptor.size.width,
-            image.texture_descriptor.size.height,
-            image.data,
+            texture_descriptor.size.width,
+            texture_descriptor.size.height,
+            image_data,
         )
         .map(DynamicImage::ImageLuma8),
         TextureFormat::Rg8Unorm => ImageBuffer::from_raw(
-            image.texture_descriptor.size.width,
-            image.texture_descriptor.size.height,
-            image.data,
+            texture_descriptor.size.width,
+            texture_descriptor.size.height,
+            image_data,
         )
         .map(DynamicImage::ImageLumaA8),
         TextureFormat::Rgba8UnormSrgb => ImageBuffer::from_raw(
-            image.texture_descriptor.size.width,
-            image.texture_descriptor.size.height,
-            image.data,
+            texture_descriptor.size.width,
+            texture_descriptor.size.height,
+            image_data,
         )
         .map(DynamicImage::ImageRgba8),
         TextureFormat::Rgba8Unorm => ImageBuffer::from_raw(
-            image.texture_descriptor.size.width,
-            image.texture_descriptor.size.height,
-            image.data,
+            texture_descriptor.size.width,
+            texture_descriptor.size.height,
+            image_data,
         )
         .map(DynamicImage::ImageRgba8),
         // Throw and error if conversion isn't supported
@@ -322,7 +336,7 @@ pub fn try_into_dynamic(image: Image) -> anyhow::Result<DynamicImage> {
     .ok_or_else(|| {
         anyhow!(
             "Failed to convert into {:?}.",
-            image.texture_descriptor.format
+            texture_descriptor.format
         )
     })
 }
