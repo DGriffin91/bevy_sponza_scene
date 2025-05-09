@@ -1,31 +1,29 @@
-use std::{f32::consts::PI, time::Instant};
+use std::{f32::consts::PI, path::PathBuf, time::Instant};
 
-mod auto_instance;
 mod camera_controller;
 mod convert;
-mod mipmap_generator;
+pub mod mipmap_generator;
 
 use argh::FromArgs;
-use auto_instance::{AutoInstanceMaterialPlugin, AutoInstancePlugin};
 use bevy::{
     core_pipeline::{
-        bloom::BloomSettings,
-        experimental::taa::{TemporalAntiAliasBundle, TemporalAntiAliasPlugin},
+        bloom::Bloom,
+        experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing},
     },
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
-    pbr::ScreenSpaceAmbientOcclusionBundle,
+    pbr::ScreenSpaceAmbientOcclusion,
     prelude::*,
     render::view::NoFrustumCulling,
     window::{PresentMode, WindowResolution},
     winit::{UpdateMode, WinitSettings},
 };
 use camera_controller::{CameraController, CameraControllerPlugin};
-use mipmap_generator::{generate_mipmaps, MipmapGeneratorPlugin, MipmapGeneratorSettings};
-
-use crate::{
-    auto_instance::{AutoInstanceMaterialRecursive, AutoInstanceMeshRecursive},
-    convert::{change_gltf_to_use_ktx2, convert_images_to_ktx2},
+use mipmap_generator::{
+    generate_mipmaps, MipmapGeneratorDebugTextPlugin, MipmapGeneratorPlugin,
+    MipmapGeneratorSettings,
 };
+
+use crate::convert::{change_gltf_to_use_ktx2, convert_images_to_ktx2};
 
 #[derive(FromArgs, Resource, Clone)]
 /// Config
@@ -34,10 +32,6 @@ pub struct Args {
     #[argh(switch)]
     convert: bool,
 
-    /// enable auto instancing for meshes/materials
-    #[argh(switch)]
-    instance: bool,
-
     /// disable bloom, AO, AA, shadows
     #[argh(switch)]
     minimal: bool,
@@ -45,6 +39,19 @@ pub struct Args {
     /// whether to disable frustum culling.
     #[argh(switch)]
     no_frustum_culling: bool,
+
+    /// compress textures (if they are not already, requires compress feature)
+    #[argh(switch)]
+    compress: bool,
+
+    /// if low_quality_compression is set, only 0.5 byte/px formats will be used (BC1, BC4) unless the alpha channel is in use, then BC3 will be used.
+    /// When low quality is set, compression is generally faster than CompressionSpeed::UltraFast and CompressionSpeed is ignored.
+    #[argh(switch)]
+    low_quality_compression: bool,
+
+    /// compressed texture cache (requires compress feature)
+    #[argh(switch)]
+    cache: bool,
 }
 
 pub fn main() {
@@ -59,11 +66,11 @@ pub fn main() {
     let mut app = App::new();
 
     app.insert_resource(args.clone())
-        .insert_resource(Msaa::Off)
-        .insert_resource(ClearColor(Color::rgb(1.75, 1.9, 1.99)))
+        .insert_resource(ClearColor(Color::srgb(1.75, 1.9, 1.99)))
         .insert_resource(AmbientLight {
-            color: Color::rgb(1.0, 1.0, 1.0),
+            color: Color::srgb(1.0, 1.0, 1.0),
             brightness: 0.02,
+            ..default()
         })
         .insert_resource(WinitSettings {
             focused_mode: UpdateMode::Continuous,
@@ -76,15 +83,26 @@ pub fn main() {
                 ..default()
             }),
             ..default()
-        }))
-        .add_plugins((LogDiagnosticsPlugin::default(), FrameTimeDiagnosticsPlugin))
-        // Generating mipmaps takes a minute
+        })) // Generating mipmaps takes a minute
+        // Mipmap generation be skipped if ktx2 is used
         .insert_resource(MipmapGeneratorSettings {
             anisotropic_filtering: 16,
+            compression: Option::from(args.compress.then(Default::default)),
+            compressed_image_data_cache_path: if args.cache {
+                Some(PathBuf::from("compressed_texture_cache"))
+            } else {
+                None
+            },
+            low_quality: args.low_quality_compression,
             ..default()
         })
         .add_plugins((
+            LogDiagnosticsPlugin::default(),
+            FrameTimeDiagnosticsPlugin::default(),
+        ))
+        .add_plugins((
             MipmapGeneratorPlugin,
+            MipmapGeneratorDebugTextPlugin,
             CameraControllerPlugin,
             TemporalAntiAliasPlugin,
         ))
@@ -102,12 +120,6 @@ pub fn main() {
     if args.no_frustum_culling {
         app.add_systems(Update, add_no_frustum_culling);
     }
-    if args.instance {
-        app.add_plugins((
-            AutoInstancePlugin,
-            AutoInstanceMaterialPlugin::<StandardMaterial>::default(),
-        ));
-    }
 
     app.run();
 }
@@ -123,42 +135,25 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
 
     // sponza
     commands.spawn((
-        SceneBundle {
-            scene: asset_server.load("main_sponza/NewSponza_Main_glTF_002.gltf#Scene0"),
-            ..default()
-        },
+        SceneRoot(asset_server.load("main_sponza/NewSponza_Main_glTF_002.gltf#Scene0")),
         PostProcScene,
-        AutoInstanceMaterialRecursive,
-        AutoInstanceMeshRecursive,
     ));
 
     // curtains
     commands.spawn((
-        SceneBundle {
-            scene: asset_server.load("PKG_A_Curtains/NewSponza_Curtains_glTF.gltf#Scene0"),
-            ..default()
-        },
+        SceneRoot(asset_server.load("PKG_A_Curtains/NewSponza_Curtains_glTF.gltf#Scene0")),
         PostProcScene,
-        AutoInstanceMaterialRecursive,
-        AutoInstanceMeshRecursive,
     ));
 
     // Sun
     commands.spawn((
-        DirectionalLightBundle {
-            transform: Transform::from_rotation(Quat::from_euler(
-                EulerRot::XYZ,
-                PI * -0.43,
-                PI * -0.08,
-                0.0,
-            )),
-            directional_light: DirectionalLight {
-                color: Color::rgb(1.0, 1.0, 0.99),
-                illuminance: 300000.0 * 0.2,
-                shadows_enabled: !args.minimal,
-                shadow_depth_bias: 0.3,
-                shadow_normal_bias: 0.7,
-            },
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, PI * -0.43, PI * -0.08, 0.0)),
+        DirectionalLight {
+            color: Color::srgb(1.0, 1.0, 0.99),
+            illuminance: 300000.0 * 0.2,
+            shadows_enabled: !args.minimal,
+            shadow_depth_bias: 0.3,
+            shadow_normal_bias: 0.7,
             ..default()
         },
         GrifLight,
@@ -168,18 +163,14 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
 
     // Sun Refl
     commands.spawn((
-        SpotLightBundle {
-            transform: Transform::from_xyz(2.0, -0.0, -2.0)
-                .looking_at(Vec3::new(0.0, 999.0, 0.0), Vec3::X),
-            spot_light: SpotLight {
-                range: 15.0,
-                intensity: 700.0 * point_spot_mult,
-                color: Color::rgb(1.0, 0.97, 0.85),
-                shadows_enabled: false,
-                inner_angle: PI * 0.4,
-                outer_angle: PI * 0.5,
-                ..default()
-            },
+        Transform::from_xyz(2.0, -0.0, -2.0).looking_at(Vec3::new(0.0, 999.0, 0.0), Vec3::X),
+        SpotLight {
+            range: 15.0,
+            intensity: 700.0 * point_spot_mult,
+            color: Color::srgb(1.0, 0.97, 0.85),
+            shadows_enabled: false,
+            inner_angle: PI * 0.4,
+            outer_angle: PI * 0.5,
             ..default()
         },
         GrifLight,
@@ -187,18 +178,14 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
 
     // Sun refl 2nd bounce / misc bounces
     commands.spawn((
-        SpotLightBundle {
-            transform: Transform::from_xyz(2.0, 5.5, -2.0)
-                .looking_at(Vec3::new(0.0, -999.0, 0.0), Vec3::X),
-            spot_light: SpotLight {
-                range: 13.0,
-                intensity: 500.0 * point_spot_mult,
-                color: Color::rgb(1.0, 0.97, 0.85),
-                shadows_enabled: false,
-                inner_angle: PI * 0.3,
-                outer_angle: PI * 0.4,
-                ..default()
-            },
+        Transform::from_xyz(2.0, 5.5, -2.0).looking_at(Vec3::new(0.0, -999.0, 0.0), Vec3::X),
+        SpotLight {
+            range: 13.0,
+            intensity: 500.0 * point_spot_mult,
+            color: Color::srgb(1.0, 0.97, 0.85),
+            shadows_enabled: false,
+            inner_angle: PI * 0.3,
+            outer_angle: PI * 0.4,
             ..default()
         },
         GrifLight,
@@ -207,35 +194,28 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
     // sky
     // seems to be making blocky artifacts. Even if it's the only light.
     commands.spawn((
-        PointLightBundle {
-            point_light: PointLight {
-                color: Color::rgb(0.8, 0.9, 0.97),
-                intensity: 10000.0 * point_spot_mult,
-                shadows_enabled: false,
-                range: 24.0,
-                radius: 3.0,
-                ..default()
-            },
-            transform: Transform::from_xyz(0.0, 30.0, 0.0),
+        PointLight {
+            color: Color::srgb(0.8, 0.9, 0.97),
+            intensity: 10000.0 * point_spot_mult,
+            shadows_enabled: false,
+            range: 24.0,
+            radius: 3.0,
             ..default()
         },
+        Transform::from_xyz(0.0, 30.0, 0.0),
         GrifLight,
     ));
 
     // sky refl
     commands.spawn((
-        SpotLightBundle {
-            transform: Transform::from_xyz(0.0, -2.0, 0.0)
-                .looking_at(Vec3::new(0.0, 999.0, 0.0), Vec3::X),
-            spot_light: SpotLight {
-                range: 11.0,
-                intensity: 40.0 * point_spot_mult,
-                color: Color::rgb(0.8, 0.9, 0.97),
-                shadows_enabled: false,
-                inner_angle: PI * 0.46,
-                outer_angle: PI * 0.49,
-                ..default()
-            },
+        Transform::from_xyz(0.0, -2.0, 0.0).looking_at(Vec3::new(0.0, 999.0, 0.0), Vec3::X),
+        SpotLight {
+            range: 11.0,
+            intensity: 40.0 * point_spot_mult,
+            color: Color::srgb(0.8, 0.9, 0.97),
+            shadows_enabled: false,
+            inner_angle: PI * 0.46,
+            outer_angle: PI * 0.49,
             ..default()
         },
         GrifLight,
@@ -243,19 +223,15 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
 
     // sky low
     commands.spawn((
-        SpotLightBundle {
-            transform: Transform::from_xyz(3.0, 2.0, 0.0)
-                .looking_at(Vec3::new(0.0, -999.0, 0.0), Vec3::X),
-            spot_light: SpotLight {
-                range: 12.0,
-                radius: 0.0,
-                intensity: 600.0 * point_spot_mult,
-                color: Color::rgb(0.8, 0.9, 0.95),
-                shadows_enabled: false,
-                inner_angle: PI * 0.34,
-                outer_angle: PI * 0.5,
-                ..default()
-            },
+        Transform::from_xyz(3.0, 2.0, 0.0).looking_at(Vec3::new(0.0, -999.0, 0.0), Vec3::X),
+        SpotLight {
+            range: 12.0,
+            radius: 0.0,
+            intensity: 600.0 * point_spot_mult,
+            color: Color::srgb(0.8, 0.9, 0.95),
+            shadows_enabled: false,
+            inner_angle: PI * 0.34,
+            outer_angle: PI * 0.5,
             ..default()
         },
         GrifLight,
@@ -263,37 +239,36 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
 
     // Camera
     let mut cam = commands.spawn((
-        Camera3dBundle {
-            camera: Camera {
-                hdr: true,
-                ..default()
-            },
-            transform: Transform::from_xyz(-10.5, 1.7, -1.0)
-                .looking_at(Vec3::new(0.0, 3.5, 0.0), Vec3::Y),
-            projection: Projection::Perspective(PerspectiveProjection {
-                fov: std::f32::consts::PI / 3.0,
-                near: 0.1,
-                far: 1000.0,
-                aspect_ratio: 1.0,
-            }),
+        Camera3d::default(),
+        Camera {
+            hdr: true,
             ..default()
         },
+        Transform::from_xyz(-10.5, 1.7, -1.0).looking_at(Vec3::new(0.0, 3.5, 0.0), Vec3::Y),
+        Projection::Perspective(PerspectiveProjection {
+            fov: std::f32::consts::PI / 3.0,
+            near: 0.1,
+            far: 1000.0,
+            aspect_ratio: 1.0,
+        }),
         EnvironmentMapLight {
             diffuse_map: asset_server.load("environment_maps/pisa_diffuse_rgb9e5_zstd.ktx2"),
             specular_map: asset_server.load("environment_maps/pisa_specular_rgb9e5_zstd.ktx2"),
             intensity: 250.0,
+            ..default()
         },
+        Msaa::Off,
     ));
     if !args.minimal {
         cam.insert((
-            BloomSettings {
+            Bloom {
                 intensity: 0.05,
                 ..default()
             },
             CameraController::default().print_controls(),
-            TemporalAntiAliasBundle::default(),
+            TemporalAntiAliasing::default(),
         ))
-        .insert(ScreenSpaceAmbientOcclusionBundle::default());
+        .insert(ScreenSpaceAmbientOcclusion::default());
     }
 }
 
@@ -315,7 +290,7 @@ pub fn proc_scene(
     mut commands: Commands,
     flip_normals_query: Query<Entity, With<PostProcScene>>,
     children_query: Query<&Children>,
-    has_std_mat: Query<&Handle<StandardMaterial>>,
+    has_std_mat: Query<&MeshMaterial3d<StandardMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     lights: Query<
         Entity,
@@ -338,12 +313,12 @@ pub fn proc_scene(
 
                 // Sponza has a bunch of lights by default
                 if lights.get(entity).is_ok() {
-                    commands.entity(entity).despawn_recursive();
+                    commands.entity(entity).despawn();
                 }
 
                 // Sponza has a bunch of cameras by default
                 if cameras.get(entity).is_ok() {
-                    commands.entity(entity).despawn_recursive();
+                    commands.entity(entity).despawn();
                 }
             });
             commands.entity(entity).remove::<PostProcScene>();
@@ -370,7 +345,7 @@ const CAM_POS_3: Transform = Transform {
 };
 
 fn input(input: Res<ButtonInput<KeyCode>>, mut camera: Query<&mut Transform, With<Camera>>) {
-    let Ok(mut transform) = camera.get_single_mut() else {
+    let Ok(mut transform) = camera.single_mut() else {
         return;
     };
     if input.just_pressed(KeyCode::KeyI) {
@@ -399,7 +374,7 @@ fn benchmark(
         *bench_started = Some(Instant::now());
         *bench_frame = 0;
         // Try to render for around 2s or at least 30 frames per step
-        *count_per_step = ((2.0 / time.delta_seconds()) as u32).max(30);
+        *count_per_step = ((2.0 / time.delta_secs()) as u32).max(30);
         println!(
             "Starting Benchmark with {} frames per step",
             *count_per_step
@@ -408,7 +383,7 @@ fn benchmark(
     if bench_started.is_none() {
         return;
     }
-    let Ok(mut transform) = camera.get_single_mut() else {
+    let Ok(mut transform) = camera.single_mut() else {
         return;
     };
     if *bench_frame == 0 {
@@ -432,7 +407,13 @@ fn benchmark(
 
 pub fn add_no_frustum_culling(
     mut commands: Commands,
-    convert_query: Query<Entity, (Without<NoFrustumCulling>, With<Handle<StandardMaterial>>)>,
+    convert_query: Query<
+        Entity,
+        (
+            Without<NoFrustumCulling>,
+            With<MeshMaterial3d<StandardMaterial>>,
+        ),
+    >,
 ) {
     for entity in convert_query.iter() {
         commands.entity(entity).insert(NoFrustumCulling);

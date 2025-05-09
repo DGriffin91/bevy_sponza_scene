@@ -12,3 +12,5 @@ Cargo.lock
 assets/main_sponza/*
 assets/PKG_A_Curtains/*
 imgui.ini
+
+compressed_texture_cache
