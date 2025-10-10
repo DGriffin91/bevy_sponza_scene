@@ -6,14 +6,13 @@ pub mod mipmap_generator;
 
 use argh::FromArgs;
 use bevy::{
-    core_pipeline::{
-        bloom::Bloom,
-        experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing},
-    },
+    anti_alias::taa::TemporalAntiAliasing,
+    camera::visibility::NoFrustumCulling,
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
     pbr::ScreenSpaceAmbientOcclusion,
+    post_process::bloom::Bloom,
     prelude::*,
-    render::view::NoFrustumCulling,
+    render::view::Hdr,
     window::{PresentMode, WindowResolution},
     winit::{UpdateMode, WinitSettings},
 };
@@ -79,7 +78,7 @@ pub fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 present_mode: PresentMode::Immediate,
-                resolution: WindowResolution::new(1920.0, 1080.0).with_scale_factor_override(1.0),
+                resolution: WindowResolution::new(1920, 1080).with_scale_factor_override(1.0),
                 ..default()
             }),
             ..default()
@@ -104,7 +103,6 @@ pub fn main() {
             MipmapGeneratorPlugin,
             MipmapGeneratorDebugTextPlugin,
             CameraControllerPlugin,
-            TemporalAntiAliasPlugin,
         ))
         // Mipmap generation be skipped if ktx2 is used
         .add_systems(
@@ -240,10 +238,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
     // Camera
     let mut cam = commands.spawn((
         Camera3d::default(),
-        Camera {
-            hdr: true,
-            ..default()
-        },
+        Hdr,
         Transform::from_xyz(-10.5, 1.7, -1.0).looking_at(Vec3::new(0.0, 3.5, 0.0), Vec3::Y),
         Projection::Perspective(PerspectiveProjection {
             fov: std::f32::consts::PI / 3.0,
