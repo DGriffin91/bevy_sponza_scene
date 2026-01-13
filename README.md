@@ -8,4 +8,5 @@ Extract the files into `./assets/main_sponza/` and `./assets/PKG_A_Curtains/`
 
 No GI, just aiming lights where there should be light.
 
-To optionally convert the textures to KTX2 use: `cargo run -- --convert`. You need [kram](https://github.com/alecazam/kram) in your path to do this. It will convert all the textures to BC7 KTX2 zstd 0 using `available_parallelism()` and update the gltf files to use the KTX2 textures.
+To optionally convert the textures to KTX2 use: `cargo run -- --convert`. You need [kram](https://github.com/alecazam/kram) in your path to do this. It will convert all the textures to BC7 KTX2 zstd 0 using `available_parallelism()` and update the gltf files to use the KTX2 textures. Or use `compress` feature with `--compress` arg to generate compressed textures with mipmaps at runtime. `--cache` will additionally cache the compressed textures. So to run with cached runtime compression:
+`cargo run --release --features compress -- --compress --cache`

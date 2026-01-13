@@ -1,6 +1,5 @@
 use std::{f32::consts::PI, path::PathBuf, time::Instant};
 
-mod camera_controller;
 mod convert;
 pub mod mipmap_generator;
 
@@ -8,15 +7,16 @@ use argh::FromArgs;
 use bevy::{
     anti_alias::taa::TemporalAntiAliasing,
     camera::visibility::NoFrustumCulling,
+    camera_controller::free_camera::{FreeCamera, FreeCameraPlugin},
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
     pbr::ScreenSpaceAmbientOcclusion,
     post_process::bloom::Bloom,
     prelude::*,
     render::view::Hdr,
+    scene::SceneInstanceReady,
     window::{PresentMode, WindowResolution},
     winit::{UpdateMode, WinitSettings},
 };
-use camera_controller::{CameraController, CameraControllerPlugin};
 use mipmap_generator::{
     generate_mipmaps, MipmapGeneratorDebugTextPlugin, MipmapGeneratorPlugin,
     MipmapGeneratorSettings,
@@ -66,7 +66,7 @@ pub fn main() {
 
     app.insert_resource(args.clone())
         .insert_resource(ClearColor(Color::srgb(1.75, 1.9, 1.99)))
-        .insert_resource(AmbientLight {
+        .insert_resource(GlobalAmbientLight {
             color: Color::srgb(1.0, 1.0, 1.0),
             brightness: 0.02,
             ..default()
@@ -102,17 +102,12 @@ pub fn main() {
         .add_plugins((
             MipmapGeneratorPlugin,
             MipmapGeneratorDebugTextPlugin,
-            CameraControllerPlugin,
+            FreeCameraPlugin,
         ))
         // Mipmap generation be skipped if ktx2 is used
         .add_systems(
             Update,
-            (
-                generate_mipmaps::<StandardMaterial>,
-                proc_scene,
-                input,
-                benchmark,
-            ),
+            (generate_mipmaps::<StandardMaterial>, input, benchmark),
         )
         .add_systems(Startup, setup);
     if args.no_frustum_culling {
@@ -122,26 +117,22 @@ pub fn main() {
     app.run();
 }
 
-#[derive(Component)]
-pub struct PostProcScene;
-
-#[derive(Component)]
-pub struct GrifLight;
-
 pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<Args>) {
     println!("Loading models, generating mipmaps");
 
     // sponza
-    commands.spawn((
-        SceneRoot(asset_server.load("main_sponza/NewSponza_Main_glTF_002.gltf#Scene0")),
-        PostProcScene,
-    ));
+    commands
+        .spawn(SceneRoot(
+            asset_server.load("main_sponza/NewSponza_Main_glTF_002.gltf#Scene0"),
+        ))
+        .observe(proc_scene);
 
     // curtains
-    commands.spawn((
-        SceneRoot(asset_server.load("PKG_A_Curtains/NewSponza_Curtains_glTF.gltf#Scene0")),
-        PostProcScene,
-    ));
+    commands
+        .spawn(SceneRoot(
+            asset_server.load("PKG_A_Curtains/NewSponza_Curtains_glTF.gltf#Scene0"),
+        ))
+        .observe(proc_scene);
 
     // Sun
     commands.spawn((
@@ -154,7 +145,6 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
             shadow_normal_bias: 0.7,
             ..default()
         },
-        GrifLight,
     ));
 
     let point_spot_mult = 1000.0;
@@ -171,7 +161,6 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
             outer_angle: PI * 0.5,
             ..default()
         },
-        GrifLight,
     ));
 
     // Sun refl 2nd bounce / misc bounces
@@ -186,7 +175,6 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
             outer_angle: PI * 0.4,
             ..default()
         },
-        GrifLight,
     ));
 
     // sky
@@ -201,7 +189,6 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
             ..default()
         },
         Transform::from_xyz(0.0, 30.0, 0.0),
-        GrifLight,
     ));
 
     // sky refl
@@ -216,7 +203,6 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
             outer_angle: PI * 0.49,
             ..default()
         },
-        GrifLight,
     ));
 
     // sky low
@@ -232,7 +218,6 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
             outer_angle: PI * 0.5,
             ..default()
         },
-        GrifLight,
     ));
 
     // Camera
@@ -242,9 +227,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
         Transform::from_xyz(-10.5, 1.7, -1.0).looking_at(Vec3::new(0.0, 3.5, 0.0), Vec3::Y),
         Projection::Perspective(PerspectiveProjection {
             fov: std::f32::consts::PI / 3.0,
-            near: 0.1,
-            far: 1000.0,
-            aspect_ratio: 1.0,
+            ..default()
         }),
         EnvironmentMapLight {
             diffuse_map: asset_server.load("environment_maps/pisa_diffuse_rgb9e5_zstd.ktx2"),
@@ -253,6 +236,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
             ..default()
         },
         Msaa::Off,
+        FreeCamera::default(),
     ));
     if !args.minimal {
         cam.insert((
@@ -260,7 +244,6 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
                 intensity: 0.05,
                 ..default()
             },
-            CameraController::default().print_controls(),
             TemporalAntiAliasing::default(),
         ))
         .insert(ScreenSpaceAmbientOcclusion::default());
@@ -282,41 +265,30 @@ pub fn all_children<F: FnMut(Entity)>(
 
 #[allow(clippy::type_complexity)]
 pub fn proc_scene(
+    scene_ready: On<SceneInstanceReady>,
     mut commands: Commands,
-    flip_normals_query: Query<Entity, With<PostProcScene>>,
-    children_query: Query<&Children>,
+    children: Query<&Children>,
     has_std_mat: Query<&MeshMaterial3d<StandardMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    lights: Query<
-        Entity,
-        (
-            Or<(With<PointLight>, With<DirectionalLight>, With<SpotLight>)>,
-            Without<GrifLight>,
-        ),
-    >,
+    lights: Query<Entity, Or<(With<PointLight>, With<DirectionalLight>, With<SpotLight>)>>,
     cameras: Query<Entity, With<Camera>>,
 ) {
-    for entity in flip_normals_query.iter() {
-        if let Ok(children) = children_query.get(entity) {
-            all_children(children, &children_query, &mut |entity| {
-                // Sponza needs flipped normals
-                if let Ok(mat_h) = has_std_mat.get(entity) {
-                    if let Some(mat) = materials.get_mut(mat_h) {
-                        mat.flip_normal_map_y = true;
-                    }
-                }
+    for entity in children.iter_descendants(scene_ready.entity) {
+        // Sponza needs flipped normals
+        if let Ok(mat_h) = has_std_mat.get(entity) {
+            if let Some(mat) = materials.get_mut(mat_h) {
+                mat.flip_normal_map_y = true;
+            }
+        }
 
-                // Sponza has a bunch of lights by default
-                if lights.get(entity).is_ok() {
-                    commands.entity(entity).despawn();
-                }
+        // Sponza has a bunch of lights by default
+        if lights.get(entity).is_ok() {
+            commands.entity(entity).despawn();
+        }
 
-                // Sponza has a bunch of cameras by default
-                if cameras.get(entity).is_ok() {
-                    commands.entity(entity).despawn();
-                }
-            });
-            commands.entity(entity).remove::<PostProcScene>();
+        // Sponza has a bunch of cameras by default
+        if cameras.get(entity).is_ok() {
+            commands.entity(entity).despawn();
         }
     }
 }
