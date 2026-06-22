@@ -6,16 +6,15 @@ pub mod mipmap_generator;
 use argh::FromArgs;
 use bevy::{
     anti_alias::taa::TemporalAntiAliasing,
-    camera::visibility::NoFrustumCulling,
+    camera::{visibility::NoFrustumCulling, Hdr},
     camera_controller::free_camera::{FreeCamera, FreeCameraPlugin},
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
     pbr::ScreenSpaceAmbientOcclusion,
     post_process::bloom::Bloom,
     prelude::*,
-    render::view::Hdr,
-    scene::SceneInstanceReady,
     window::{PresentMode, WindowResolution},
     winit::{UpdateMode, WinitSettings},
+    world_serialization::WorldInstanceReady,
 };
 use mipmap_generator::{
     generate_mipmaps, MipmapGeneratorDebugTextPlugin, MipmapGeneratorPlugin,
@@ -122,14 +121,14 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
 
     // sponza
     commands
-        .spawn(SceneRoot(
+        .spawn(WorldAssetRoot(
             asset_server.load("main_sponza/NewSponza_Main_glTF_002.gltf#Scene0"),
         ))
         .observe(proc_scene);
 
     // curtains
     commands
-        .spawn(SceneRoot(
+        .spawn(WorldAssetRoot(
             asset_server.load("PKG_A_Curtains/NewSponza_Curtains_glTF.gltf#Scene0"),
         ))
         .observe(proc_scene);
@@ -140,7 +139,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
         DirectionalLight {
             color: Color::srgb(1.0, 1.0, 0.99),
             illuminance: 300000.0 * 0.2,
-            shadows_enabled: !args.minimal,
+            shadow_maps_enabled: !args.minimal,
             shadow_depth_bias: 0.3,
             shadow_normal_bias: 0.7,
             ..default()
@@ -156,7 +155,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
             range: 15.0,
             intensity: 700.0 * point_spot_mult,
             color: Color::srgb(1.0, 0.97, 0.85),
-            shadows_enabled: false,
+            shadow_maps_enabled: false,
             inner_angle: PI * 0.4,
             outer_angle: PI * 0.5,
             ..default()
@@ -170,7 +169,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
             range: 13.0,
             intensity: 500.0 * point_spot_mult,
             color: Color::srgb(1.0, 0.97, 0.85),
-            shadows_enabled: false,
+            shadow_maps_enabled: false,
             inner_angle: PI * 0.3,
             outer_angle: PI * 0.4,
             ..default()
@@ -183,7 +182,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
         PointLight {
             color: Color::srgb(0.8, 0.9, 0.97),
             intensity: 10000.0 * point_spot_mult,
-            shadows_enabled: false,
+            shadow_maps_enabled: false,
             range: 24.0,
             radius: 3.0,
             ..default()
@@ -198,7 +197,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
             range: 11.0,
             intensity: 40.0 * point_spot_mult,
             color: Color::srgb(0.8, 0.9, 0.97),
-            shadows_enabled: false,
+            shadow_maps_enabled: false,
             inner_angle: PI * 0.46,
             outer_angle: PI * 0.49,
             ..default()
@@ -213,7 +212,7 @@ pub fn setup(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<A
             radius: 0.0,
             intensity: 600.0 * point_spot_mult,
             color: Color::srgb(0.8, 0.9, 0.95),
-            shadows_enabled: false,
+            shadow_maps_enabled: false,
             inner_angle: PI * 0.34,
             outer_angle: PI * 0.5,
             ..default()
@@ -265,7 +264,7 @@ pub fn all_children<F: FnMut(Entity)>(
 
 #[allow(clippy::type_complexity)]
 pub fn proc_scene(
-    scene_ready: On<SceneInstanceReady>,
+    scene_ready: On<WorldInstanceReady>,
     mut commands: Commands,
     children: Query<&Children>,
     has_std_mat: Query<&MeshMaterial3d<StandardMaterial>>,
@@ -276,7 +275,7 @@ pub fn proc_scene(
     for entity in children.iter_descendants(scene_ready.entity) {
         // Sponza needs flipped normals
         if let Ok(mat_h) = has_std_mat.get(entity) {
-            if let Some(mat) = materials.get_mut(mat_h) {
+            if let Some(mut mat) = materials.get_mut(mat_h) {
                 mat.flip_normal_map_y = true;
             }
         }

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = { version = "0.18", features = [
+bevy = { version = "0.19", features = [
     "bevy_camera_controller",
     "free_camera",
 ] }
